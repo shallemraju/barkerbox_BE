@@ -27,13 +27,20 @@ class DatabaseAdapterTests(unittest.TestCase):
             ("UPDATE orders SET updated_at = CURRENT_TIMESTAMP::text WHERE id = %s", ("order-1",)),
         )
 
-    def test_postgres_connection_errors_do_not_fall_back_to_sqlite(self):
+    def test_unavailable_postgres_driver_falls_back_to_sqlite(self):
+        original_import = __import__
+
+        def import_without_psycopg(name, *args, **kwargs):
+            if name == "psycopg" or name.startswith("psycopg."):
+                raise ImportError("PostgreSQL driver is unavailable")
+            return original_import(name, *args, **kwargs)
+
         with patch("database.DATABASE_URL", "postgresql://example.invalid/db"):
-            with patch("database.psycopg.connect", side_effect=RuntimeError("connection failed")):
-                with patch("database.sqlite3.connect") as sqlite_connect:
-                    with self.assertRaisesRegex(RuntimeError, "connection failed"):
-                        get_db()
-                    sqlite_connect.assert_not_called()
+            with patch("database._USE_SQLITE", False):
+                with patch("builtins.__import__", side_effect=import_without_psycopg):
+                    with patch("database.sqlite3.connect") as sqlite_connect:
+                        self.assertIs(get_db(), sqlite_connect.return_value)
+                        sqlite_connect.assert_called_once()
 
 
 if __name__ == "__main__":

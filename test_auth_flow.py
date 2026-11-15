@@ -140,6 +140,77 @@ def run_tests():
     assert track_info2["delivery_boy_name"] == "Rajesh Kumar"
     print(f"   Success: Order live tracking shows assigned to {track_info2['delivery_boy_name']}!")
 
+    print("\n13. Testing Owner Login & Role Authorization...")
+    from main import OwnerLoginSchema, owner_login, get_all_menu_items_for_admin, update_menu_item, UpdateMenuItemSchema
+    # Test standard credentials
+    owner_res = owner_login(OwnerLoginSchema(email="owner@bakersbox.com", password="Owner@BakersBox2026"))
+    assert owner_res["success"] is True
+    assert owner_res["user"]["role"] == "owner"
+    owner_token = owner_res["token"]
+    owner_ctx = get_current_admin(authorization=f"Bearer {owner_token}")
+    assert owner_ctx["role"] == "owner"
+    print(f"   Success: Owner logged in securely! Role: {owner_ctx['role']}, Token: {owner_token[:15]}...")
+
+    # Test shorthand "owner" username and case-insensitive password tolerance
+    owner_res_short = owner_login(OwnerLoginSchema(email="owner", password="owner@bakersbox2026"))
+    assert owner_res_short["success"] is True
+    assert owner_res_short["user"]["email"] == "owner@bakersbox.com"
+    print("   Success: Shorthand 'owner' username and lowercase password tolerated perfectly!")
+
+    # Test admin executive login through owner endpoint
+    admin_owner_res = owner_login(OwnerLoginSchema(email="admin", password="admin"))
+    assert admin_owner_res["success"] is True
+    print("   Success: Admin executive allowed access through Owner portal!")
+
+    print("\n14. Testing Owner Menu Management (List & Toggle)...")
+    menu_catalog = get_all_menu_items_for_admin(admin=owner_ctx)
+    assert menu_catalog["count"] == 82
+    first_item = menu_catalog["items"][0]
+    first_id = first_item["id"]
+    print(f"   Success: Owner retrieved {menu_catalog['count']} delicacies.")
+
+    # Toggle to unavailable
+    toggle_res = update_menu_item(item_id=first_id, payload=UpdateMenuItemSchema(is_available=False), admin=owner_ctx)
+    assert toggle_res["success"] is True
+    assert toggle_res["item"]["is_available"] == 0
+
+    # Restore to available
+    restore_res = update_menu_item(item_id=first_id, payload=UpdateMenuItemSchema(is_available=True), admin=owner_ctx)
+    assert restore_res["success"] is True
+    assert restore_res["item"]["is_available"] == 1
+    print(f"   Success: Owner toggled availability of {first_item['name']} successfully!")
+
+    print("\n15. Testing Owner Delivery Fleet & Staff Onboarding...")
+    from main import CreateDeliveryStaffSchema, UpdateStaffStatusSchema, add_delivery_staff, delete_delivery_staff, update_delivery_staff_status, get_delivery_staff
+    
+    # Onboard
+    new_driver_res = add_delivery_staff(
+        payload=CreateDeliveryStaffSchema(
+            name="Vikram Singh",
+            phone="+91 98200 99887",
+            vehicle="Ather 450X (Chilled Box)"
+        ),
+        admin=owner_ctx
+    )
+    assert new_driver_res["success"] is True
+    driver_id = new_driver_res["staff"]["id"]
+    print(f"   Success: Onboarded {new_driver_res['staff']['name']} (ID: {driver_id})")
+
+    # Toggle status to offline then available
+    status_res = update_delivery_staff_status(
+        staff_id=driver_id,
+        payload=UpdateStaffStatusSchema(status="offline"),
+        admin=owner_ctx
+    )
+    assert status_res["success"] is True
+    assert status_res["staff"]["status"] == "offline"
+    print("   Success: Staff status successfully toggled to offline")
+
+    # Delete / offboard
+    del_res = delete_delivery_staff(staff_id=driver_id, admin=owner_ctx)
+    assert del_res["success"] is True
+    print(f"   Success: Delivery partner {driver_id} offboarded successfully!")
+
     print("\n=======================================================")
     print("ALL FASTAPI AUTHENTICATION & RBAC ENDPOINT TESTS PASSED!")
     print("=======================================================")

@@ -7,9 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
-import psycopg
 from dotenv import load_dotenv
-from psycopg.rows import dict_row
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env.local")
@@ -63,6 +61,9 @@ def get_db():
             raise ValueError("DATABASE_URL must be a PostgreSQL connection URL")
         clean_url = DATABASE_URL.replace("&channel_binding=require", "").replace("channel_binding=require&", "").replace("channel_binding=require", "")
         try:
+            import psycopg
+            from psycopg.rows import dict_row
+
             connection = psycopg.connect(
                 clean_url,
                 connect_timeout=3,
@@ -193,9 +194,106 @@ def init_db():
         created_at TEXT NOT NULL
     )
     """)
+
+    # 8. Contact Inquiries & Bulk Gifting Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS contact_inquiries (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        inquiry_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        status TEXT DEFAULT 'new',
+        created_at TEXT NOT NULL
+    )
+    """)
+
+    # 9. Performance Indexes for Rapid Data Retrieval
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_tracking_code ON orders(tracking_code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_menu_category ON menu_items(category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contact_email ON contact_inquiries(email)")
     
     conn.commit()
     conn.close()
+
+    # Guarantee owner, admin, and staff accounts are seeded in active database
+    ensure_default_accounts()
+
+
+def ensure_default_accounts():
+    """
+    Guarantees that the Owner account, Admin account, and Delivery staff exist
+    in whichever database is currently active (Neon Cloud PostgreSQL or local SQLite).
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # 1. Ensure Owner Account
+        cursor.execute("SELECT id FROM users WHERE email = ?", ("owner@bakersbox.com",))
+        owner_exists = cursor.fetchone()
+        if not owner_exists:
+            cursor.execute("""
+                INSERT INTO users (id, name, email, phone, password, role, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                "usr-owner-root",
+                "The Baker's Box Owner",
+                "owner@bakersbox.com",
+                "9820000001",
+                "Owner@BakersBox2026",
+                "owner"
+            ))
+        else:
+            cursor.execute("""
+                UPDATE users SET password = ?, role = ? WHERE email = ?
+            """, ("Owner@BakersBox2026", "owner", "owner@bakersbox.com"))
+
+        # 2. Ensure Admin Account
+        cursor.execute("SELECT id FROM users WHERE email = ?", ("admin@burgerbox.com",))
+        admin_exists = cursor.fetchone()
+        if not admin_exists:
+            cursor.execute("""
+                INSERT INTO users (id, name, email, phone, password, role, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                "usr-admin-root",
+                "System Administrator",
+                "admin@burgerbox.com",
+                "9820000000",
+                "admin",
+                "admin"
+            ))
+        else:
+            cursor.execute("""
+                UPDATE users SET password = ?, role = ? WHERE email = ?
+            """, ("admin", "admin", "admin@burgerbox.com"))
+
+        # 3. Ensure Delivery Fleet Staff exists
+        cursor.execute("SELECT COUNT(*) FROM delivery_staff")
+        staff_row = cursor.fetchone()
+        count_val = staff_row[0] if (staff_row and not isinstance(staff_row, dict)) else (staff_row.get('count', 0) if isinstance(staff_row, dict) else 0)
+        if not count_val:
+            fleet = [
+                ("del-1", "Rajesh Kumar", "+91 98765 43210", "Honda Activa 6G (Insulated Box)", "available", 0),
+                ("del-2", "Amit Verma", "+91 98112 34567", "Hero Electric Optima (Thermal Bag)", "available", 0),
+                ("del-3", "Suresh Patil", "+91 98200 89123", "TVS Jupiter (Chilled Caddy)", "available", 0)
+            ]
+            for s in fleet:
+                cursor.execute("""
+                    INSERT INTO delivery_staff (id, name, phone, vehicle, status, active_orders)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, s)
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Auth Setup Warning] ensure_default_accounts exception: {e}")
 
 
 def should_seed_demo_data() -> bool:
@@ -205,9 +303,10 @@ def should_seed_demo_data() -> bool:
         cursor.execute("SELECT COUNT(*) FROM menu_items")
         row = cursor.fetchone()
         conn.close()
-        if not row or row[0] == 0:
+        if not row:
             return True
-        return False
+        val = row[0] if not isinstance(row, dict) else list(row.values())[0]
+        return val == 0
     except Exception:
         return True
 
